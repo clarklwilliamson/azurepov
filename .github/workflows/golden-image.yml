@@ -59,7 +59,7 @@ jobs:
             --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
             --os-type Windows --os-state Generalized \
             --hyper-v-generation V2 \
-            --features SecurityType=TrustedLaunch DiskControllerTypes=SCSI,NVMe -o none 2>/dev/null || true
+            --features "SecurityType=TrustedLaunch DiskControllerTypes=SCSI,NVMe" -o none 2>/dev/null || true
           echo "gallery and image definition ready"
 
           # A version left behind in Failed state from an earlier run blocks a rebuild of

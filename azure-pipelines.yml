@@ -56,7 +56,7 @@ stages:
             --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
             --os-type Windows --os-state Generalized \
             --hyper-v-generation V2 \
-            --features SecurityType=TrustedLaunch -o none 2>/dev/null || true
+            --features "SecurityType=TrustedLaunch DiskControllerTypes=SCSI,NVMe" -o none 2>/dev/null || true
 
           STATE=$(az sig image-version show -g "$(resourceGroup)" --gallery-name "$(galleryName)" \
                     --gallery-image-definition "$(imageDef)" \
