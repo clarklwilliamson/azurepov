@@ -190,8 +190,18 @@ jobs:
       - name: Tear down the test server
         if: always()
         run: |
-          az vm delete -g "$RESOURCE_GROUP" -n "${{ steps.vm.outputs.vmName }}" --yes -o none 2>/dev/null || true
-          echo "test server deleted; the image version stays in the gallery"
+          VM="${{ steps.vm.outputs.vmName }}"
+          [ -z "$VM" ] && { echo "no VM was created; nothing to tear down"; exit 0; }
+          az vm delete -g "$RESOURCE_GROUP" -n "$VM" --yes -o none 2>/dev/null || true
+          # az vm delete removes only the VM. Its OS disk, NIC and NSG are left behind
+          # and keep costing money. Two passes, because a NIC holds the NSG until it goes.
+          for pass in 1 2; do
+            for id in $(az resource list -g "$RESOURCE_GROUP" \
+                          --query "[?starts_with(name,'$VM')].id" -o tsv 2>/dev/null); do
+              az resource delete --ids "$id" -o none 2>/dev/null || true
+            done
+          done
+          echo "test server, disk, NIC and NSG removed; the image version stays in the gallery"
 
       - name: Fail the run if any check failed
         if: steps.verify.outputs.overall != 'PASS'
