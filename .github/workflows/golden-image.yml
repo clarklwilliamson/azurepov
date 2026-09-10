@@ -113,7 +113,7 @@ jobs:
           az vm create \
             -g "$RESOURCE_GROUP" -n "$VM" -l "${{ inputs.location }}" \
             --image "${{ needs.build.outputs.versionId }}" \
-            --size Standard_D2s_v3 \
+            --size Standard_D2ads_v6 \
             --admin-username imgbuilder \
             --admin-password '${{ secrets.LOCAL_ADMIN_PASSWORD }}' \
             --security-type TrustedLaunch \

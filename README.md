@@ -133,7 +133,7 @@ version list above shows how far behind you are, which is better than not knowin
 
 ## Cost of running this
 
-One `Standard_D2s_v3` build VM for a few minutes, one more to verify, both deleted by the
+One `Standard_D2ads_v6` build VM for a few minutes, one more to verify, both deleted by the
 pipeline. The gallery image version is the only thing that persists, and it is charged as
 storage.
 

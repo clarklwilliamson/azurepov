@@ -27,8 +27,9 @@ param(
 
     [string]$Location      = 'westus3',
     [string]$BuildVmName   = "imgbuild-$(Get-Random -Minimum 1000 -Maximum 9999)",
-    # DDSv5 family quota is 0 on a fresh subscription. DSv3 has 10.
-    [string]$BuildVmSize   = 'Standard_D2s_v3',
+    # On a fresh subscription most families are either quota 0 or NotAvailableForSubscription.
+    # D2ads_v6 is the small size that is both unrestricted and has quota in westus3.
+    [string]$BuildVmSize   = 'Standard_D2ads_v6',
     [string]$AdminUsername = 'imgbuilder',
 
     # The demo local-admin password, baked into the image by Invoke-ImagePrep.ps1.
@@ -147,7 +148,7 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     Write-Host ""
     Write-Host "Build a server from exactly this disk:"
     Write-Host "  az vm create -g $ResourceGroup -n mysrv --image $versionId ``"
-    Write-Host "     --size Standard_D2s_v3 --admin-username imgbuilder --admin-password <pw>"
+    Write-Host "     --size Standard_D2ads_v6 --admin-username imgbuilder --admin-password <pw>"
 }
 catch {
     Write-Host ""
