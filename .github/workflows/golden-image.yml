@@ -58,8 +58,22 @@ jobs:
             --gallery-image-definition "$IMAGE_DEF" \
             --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
             --os-type Windows --os-state Generalized \
-            --hyper-v-generation V2 -o none 2>/dev/null || true
+            --hyper-v-generation V2 \
+            --features SecurityType=TrustedLaunch -o none 2>/dev/null || true
           echo "gallery and image definition ready"
+
+          # A version left behind in Failed state from an earlier run blocks a rebuild of
+          # the same number. Clear it so re-running the workflow is idempotent.
+          STATE=$(az sig image-version show -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" \
+                    --gallery-image-definition "$IMAGE_DEF" \
+                    --gallery-image-version "${{ inputs.imageVersion }}" \
+                    --query provisioningState -o tsv 2>/dev/null || true)
+          if [ "$STATE" = "Failed" ]; then
+            echo "clearing failed version ${{ inputs.imageVersion }}"
+            az sig image-version delete -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" \
+               --gallery-image-definition "$IMAGE_DEF" \
+               --gallery-image-version "${{ inputs.imageVersion }}" -o none 2>/dev/null || true
+          fi
 
       - name: Build, customize, sysprep, capture
         id: capture
