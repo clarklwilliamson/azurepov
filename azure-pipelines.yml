@@ -1,0 +1,155 @@
+# Azure DevOps version of the same demo, for rooms that live in Azure DevOps
+# rather than GitHub. Identical stages, identical scripts, same subscription.
+#
+# Auth is workload identity federation through the 'azure-pov-wif' service
+# connection. No secret, no service principal key, nothing stored in the project.
+#
+# Two variables have to exist as a variable group or pipeline variables:
+#   LOCAL_ADMIN_PASSWORD   secret
+#   AZ_LOCATION            e.g. westus3
+
+trigger: none          # run it on demand, this creates real VMs
+
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+  - name: imageVersion
+    displayName: Image version to create
+    type: string
+    default: '1.0.0'
+  - name: deployAfterBuild
+    displayName: Deploy a server from the new image and verify it
+    type: boolean
+    default: true
+
+variables:
+  serviceConnection: 'azure-pov-wif'
+  resourceGroup: 'azurepov-demo'
+  galleryName: 'povgallery'
+  imageDef: 'win2022-clarkdemo'
+  location: $[coalesce(variables['AZ_LOCATION'], 'westus3')]
+
+stages:
+
+- stage: Build
+  displayName: Build and capture image
+  jobs:
+  - job: build
+    displayName: Build, customize, sysprep, capture
+    timeoutInMinutes: 90
+    steps:
+
+    - task: AzureCLI@2
+      displayName: Resource group, gallery, image definition
+      inputs:
+        azureSubscription: $(serviceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          az group create -n "$(resourceGroup)" -l "$(location)" -o none
+          az sig create -g "$(resourceGroup)" --gallery-name "$(galleryName)" -l "$(location)" -o none 2>/dev/null || true
+          az sig image-definition create \
+            -g "$(resourceGroup)" --gallery-name "$(galleryName)" \
+            --gallery-image-definition "$(imageDef)" \
+            --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
+            --os-type Windows --os-state Generalized \
+            --hyper-v-generation V2 \
+            --features SecurityType=TrustedLaunch -o none 2>/dev/null || true
+
+          STATE=$(az sig image-version show -g "$(resourceGroup)" --gallery-name "$(galleryName)" \
+                    --gallery-image-definition "$(imageDef)" \
+                    --gallery-image-version "${{ parameters.imageVersion }}" \
+                    --query provisioningState -o tsv 2>/dev/null || true)
+          if [ "$STATE" = "Failed" ]; then
+            az sig image-version delete -g "$(resourceGroup)" --gallery-name "$(galleryName)" \
+               --gallery-image-definition "$(imageDef)" \
+               --gallery-image-version "${{ parameters.imageVersion }}" -o none 2>/dev/null || true
+          fi
+          echo "gallery and image definition ready"
+
+    - task: AzureCLI@2
+      displayName: The five things, sysprep, capture
+      inputs:
+        azureSubscription: $(serviceConnection)
+        scriptType: pscore
+        scriptLocation: inlineScript
+        inlineScript: |
+          ./image/Build-GoldenImage.ps1 `
+            -ResourceGroup   '$(resourceGroup)' `
+            -GalleryName     '$(galleryName)' `
+            -ImageDefinition '$(imageDef)' `
+            -ImageVersion    '${{ parameters.imageVersion }}' `
+            -Location        '$(location)' `
+            -LocalAdminPassword '$(LOCAL_ADMIN_PASSWORD)'
+
+          $id = az sig image-version show `
+                  -g '$(resourceGroup)' --gallery-name '$(galleryName)' `
+                  --gallery-image-definition '$(imageDef)' `
+                  --gallery-image-version '${{ parameters.imageVersion }}' --query id --output tsv
+          Write-Host "##vso[task.setvariable variable=versionId;isOutput=true]$id"
+      name: capture
+
+- stage: Deploy
+  displayName: Deploy from image and verify
+  dependsOn: Build
+  condition: and(succeeded(), ${{ parameters.deployAfterBuild }})
+  jobs:
+  - job: deploy
+    displayName: Server from the image version
+    variables:
+      versionId: $[ stageDependencies.Build.build.outputs['capture.versionId'] ]
+    steps:
+
+    - task: AzureCLI@2
+      displayName: Create a server from the image version
+      inputs:
+        azureSubscription: $(serviceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -e
+          VM="povsrv-$(Build.BuildId)"
+          echo "##vso[task.setvariable variable=vmName]$VM"
+          az vm create \
+            -g "$(resourceGroup)" -n "$VM" -l "$(location)" \
+            --image "$(versionId)" \
+            --size Standard_D2ads_v6 \
+            --admin-username imgbuilder \
+            --admin-password '$(LOCAL_ADMIN_PASSWORD)' \
+            --security-type TrustedLaunch \
+            --nsg-rule NONE --public-ip-address "" \
+            -o none
+          echo "created $VM"
+
+    - task: AzureCLI@2
+      displayName: Verify the five things
+      inputs:
+        azureSubscription: $(serviceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          OUT=$(az vm run-command invoke \
+                  -g "$(resourceGroup)" -n "$(vmName)" \
+                  --command-id RunPowerShellScript \
+                  --scripts @image/Test-DeployedImage.ps1 \
+                  --query "value[0].message" -o tsv)
+          echo "$OUT"
+          echo "$OUT" | grep -q '^OVERALL|PASS' || { echo "one or more checks failed"; exit 1; }
+
+    - task: AzureCLI@2
+      displayName: Tear down the test server
+      condition: always()
+      inputs:
+        azureSubscription: $(serviceConnection)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az vm delete -g "$(resourceGroup)" -n "$(vmName)" --yes -o none 2>/dev/null || true
+          for pass in 1 2; do
+            for id in $(az resource list -g "$(resourceGroup)" --query "[?starts_with(name,'$(vmName)')].id" -o tsv 2>/dev/null); do
+              az resource delete --ids "$id" -o none 2>/dev/null || true
+            done
+          done
+          echo "test server removed; the image version stays in the gallery"
