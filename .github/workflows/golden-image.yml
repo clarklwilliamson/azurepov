@@ -156,6 +156,10 @@ jobs:
       - name: Verify the five things on the deployed server
         id: verify
         run: |
+          # The policy task deliberately waits for Azure provisioning to finish before it
+          # re-applies the Windows Update setting, so do not check before it has run.
+          echo "waiting for the boot-time policy task to run"
+          sleep 210
           OUT=$(az vm run-command invoke \
                   -g "$RESOURCE_GROUP" -n "${{ steps.vm.outputs.vmName }}" \
                   --command-id RunPowerShellScript \

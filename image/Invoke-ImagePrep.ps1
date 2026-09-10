@@ -184,7 +184,22 @@ try {
     [System.IO.File]::WriteAllText($hookCmd, (($lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
 
     $action    = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$hookCmd`""
-    $trigger   = New-ScheduledTaskTrigger -AtStartup
+
+    # AtStartup alone is too early, and the System log says so plainly. On first boot:
+    #   03:39:39  this task ran and set wuauserv to disabled
+    #   03:39:44  "Windows Update service changed from disabled to demand start"
+    #   03:39:49  Windows Azure Guest Agent and RdAgent re-enabled
+    # Azure's provisioning agent re-enables Windows Update as part of bringing its own
+    # services up, five seconds after we turned it off. Sysprep had disabled those agents
+    # at capture time, so this happens on every machine built from a generalized image.
+    #
+    # So: hold off two minutes to let provisioning finish, then repeat for an hour in case
+    # anything else reasserts it later.
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = 'PT2M'
+    $trigger.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) `
+                             -RepetitionInterval (New-TimeSpan -Minutes 5) `
+                             -RepetitionDuration (New-TimeSpan -Hours 1)).Repetition
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
