@@ -176,6 +176,14 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
         Write-Host "  build VM and its disk, NIC, NSG and VNet deleted"
     }
 
+    if ([string]::IsNullOrWhiteSpace($versionId)) {
+        throw "Capture reported success but the image version id came back empty. Refusing to continue: an empty id downstream becomes an empty --image, and az then builds a machine that is not the one under test."
+    }
+
+    # Hand the id to the CI system here rather than re-querying in the workflow, so
+    # there is exactly one place it can go missing.
+    if ($env:GITHUB_OUTPUT) { "versionId=$versionId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
+
     Write-Host ""
     Write-Host "Image version captured."
     Write-Host "  $versionId"

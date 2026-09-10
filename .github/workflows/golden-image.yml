@@ -59,7 +59,7 @@ jobs:
             --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
             --os-type Windows --os-state Generalized \
             --hyper-v-generation V2 \
-            --features SecurityType=TrustedLaunch -o none 2>/dev/null || true
+            --features SecurityType=TrustedLaunch DiskControllerTypes=SCSI,NVMe -o none 2>/dev/null || true
           echo "gallery and image definition ready"
 
           # A version left behind in Failed state from an earlier run blocks a rebuild of
@@ -86,12 +86,7 @@ jobs:
             -ImageVersion    '${{ inputs.imageVersion }}' `
             -Location        '${{ inputs.location }}' `
             -LocalAdminPassword '${{ secrets.LOCAL_ADMIN_PASSWORD }}'
-
-          $id = az sig image-version show `
-                  -g $env:RESOURCE_GROUP --gallery-name $env:GALLERY_NAME `
-                  --gallery-image-definition $env:IMAGE_DEF `
-                  --gallery-image-version '${{ inputs.imageVersion }}' --query id -o tsv
-          "versionId=$id" >> $env:GITHUB_OUTPUT
+          # the script writes versionId to $GITHUB_OUTPUT itself
 
       - name: Image versions in the gallery
         run: |
@@ -122,11 +117,20 @@ jobs:
       - name: Create a server from the image version
         id: vm
         run: |
+          IMG="${{ needs.build.outputs.versionId }}"
+          # An empty --image does NOT fail. az falls back to a default and builds a
+          # machine that is not the one under test, and every check then reports FAIL
+          # for the wrong reason. Stop here instead.
+          if [ -z "$IMG" ]; then
+            echo "::error::image version id is empty; the build job did not publish one"
+            exit 1
+          fi
+          echo "building from: $IMG"
           VM="povsrv-${GITHUB_RUN_NUMBER}"
           echo "vmName=$VM" >> $GITHUB_OUTPUT
           az vm create \
             -g "$RESOURCE_GROUP" -n "$VM" -l "${{ inputs.location }}" \
-            --image "${{ needs.build.outputs.versionId }}" \
+            --image "$IMG" \
             --size Standard_D2ads_v6 \
             --admin-username imgbuilder \
             --admin-password '${{ secrets.LOCAL_ADMIN_PASSWORD }}' \
