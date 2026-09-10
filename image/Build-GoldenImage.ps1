@@ -46,11 +46,14 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# No param block on purpose. An advanced function tries to bind leading-dash tokens to
+# its own parameters, so a trailing "-o tsv" fails with "the parameter name 'o' is
+# ambiguous". A plain function collects everything in $args and passes it straight through.
 function Invoke-Az {
-    param([Parameter(ValueFromRemainingArguments)][string[]]$Args)
-    Write-Verbose "az $($Args -join ' ')"
-    $out = & az @Args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "az $($Args -join ' ') failed:`n$out" }
+    $azArgs = $args
+    Write-Verbose "az $($azArgs -join ' ')"
+    $out = & az @azArgs 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "az $($azArgs -join ' ') failed:`n$out" }
     return $out
 }
 
@@ -81,7 +84,7 @@ try {
         --resource-group $ResourceGroup --name $BuildVmName `
         --command-id RunPowerShellScript --scripts "@$prepScript" `
         --parameters "LocalAdminPassword=$LocalAdminPassword" `
-        --query "value[0].message" -o tsv
+        --query "value[0].message" --output tsv
 
     # Echo just the summary block the prep script emits, not the whole stream.
     $inSummary = $false
@@ -111,8 +114,8 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     $deadline = (Get-Date).AddMinutes(20)
     do {
         Start-Sleep -Seconds 20
-        $state = (Invoke-Az vm get-instance-view -g $ResourceGroup -n $BuildVmName `
-                    --query "instanceView.statuses[?starts_with(code,'PowerState/')].code" -o tsv) -join ''
+        $state = (Invoke-Az vm get-instance-view --resource-group $ResourceGroup --name $BuildVmName `
+                    --query "instanceView.statuses[?starts_with(code,'PowerState/')].code" --output tsv) -join ''
         Write-Host "    $state"
         if ((Get-Date) -gt $deadline) { throw "Sysprep did not shut the VM down within 20 minutes." }
     } until ($state -match 'stopped|deallocated')
@@ -121,7 +124,7 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     Invoke-Az vm deallocate --resource-group $ResourceGroup --name $BuildVmName --output none
     Invoke-Az vm generalize --resource-group $ResourceGroup --name $BuildVmName --output none
 
-    $vmId = (Invoke-Az vm show -g $ResourceGroup -n $BuildVmName --query id -o tsv) -join ''
+    $vmId = (Invoke-Az vm show --resource-group $ResourceGroup --name $BuildVmName --query id --output tsv) -join ''
     Invoke-Az sig image-version create `
         --resource-group $ResourceGroup --gallery-name $GalleryName `
         --gallery-image-definition $ImageDefinition --gallery-image-version $ImageVersion `
@@ -131,7 +134,7 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     $versionId = (Invoke-Az sig image-version show `
         --resource-group $ResourceGroup --gallery-name $GalleryName `
         --gallery-image-definition $ImageDefinition --gallery-image-version $ImageVersion `
-        --query id -o tsv) -join ''
+        --query id --output tsv) -join ''
 
     Write-Step "5/5  clean up"
     if ($KeepBuildVm) {
