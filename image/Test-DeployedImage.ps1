@@ -20,7 +20,7 @@ $wu     = Get-Service wuauserv -ErrorAction SilentlyContinue
 $noAuto = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate
 Add-Check 'Windows Update disabled' `
           (($wu.StartType -eq 'Disabled') -and ($noAuto -eq 1)) `
-          "wuauserv StartType=$($wu.StartType), NoAutoUpdate=$noAuto (SetupComplete.cmd re-asserts the policy at first boot)"
+          "wuauserv StartType=$($wu.StartType), NoAutoUpdate=$noAuto (re-asserted at boot by the ClarkPolicyReassert task)"
 
 # 2. Local admin
 $user    = Get-LocalUser -Name 'clarkadmin' -ErrorAction SilentlyContinue

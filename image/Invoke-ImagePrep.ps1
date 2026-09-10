@@ -153,45 +153,44 @@ Write-Output "  folder, compiled service ClarkCrowdStrike, running"
 # SetupComplete.cmd is the supported first-boot hook on a sysprepped image, so re-assert
 # it there rather than pretending the policy survived.
 # ---------------------------------------------------------------------------
-Step "first-boot hook to re-assert what sysprep clears"
-# This block killed an otherwise complete build: every one of the five things had
-# already succeeded. Whatever the cause, a refinement must never take the demo down
-# with it, so the whole thing is wrapped and reports itself either way.
+Step "boot-time hook to re-assert what sysprep clears"
+# Sysprep /generalize clears some HKLM policy. NoAutoUpdate reads back as 0 on the
+# deployed machine even though it was 1 at capture, so it has to be re-applied at boot.
+#
+# SetupComplete.cmd is the documented hook for this and it does not work here:
+# C:\Windows\Setup\Scripts is owned by TrustedInstaller, so even SYSTEM gets
+# "Access to the path ... is denied". A startup scheduled task registered at build time
+# survives sysprep, runs as SYSTEM, and needs no special permissions.
+#
+# Wrapped, because this is a refinement. The five things above are the demo and a
+# refinement must not be able to take the build down with it.
 try {
-    $winDir = if ($env:SystemRoot) { $env:SystemRoot }
-              elseif ($env:windir)  { $env:windir }
-              else                  { 'C:\Windows' }
+    $reassert = 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f' +
+                ' & reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f' +
+                ' & sc config wuauserv start= disabled'
 
-    $scriptDir = Join-Path $winDir 'Setup\Scripts'
-    New-Item -Path $scriptDir -ItemType Directory -Force | Out-Null
+    $action    = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $reassert"
+    $trigger   = New-ScheduledTaskTrigger -AtStartup
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 
-    # No here-string. This whole script is shipped to the VM via
-    # "az vm run-command invoke --scripts @file", which splits and reassembles it, and a
-    # here-string terminator that has to sit at column 0 is fragile through that. An
-    # array of lines joined at the end cannot be broken by re-indentation.
-    $lines = @(
-        '@echo off',
-        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f',
-        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f',
-        'sc config wuauserv start= disabled',
-        'exit /b 0'
-    )
-    $cmd = ($lines -join "`r`n") + "`r`n"
+    Register-ScheduledTask -TaskName 'ClarkPolicyReassert' -Action $action -Trigger $trigger `
+                           -Principal $principal -Settings $settings `
+                           -Description 'Re-applies the update and Defender policy that sysprep clears.' `
+                           -Force | Out-Null
 
-    $target = Join-Path $scriptDir 'SetupComplete.cmd'
-    [System.IO.File]::WriteAllText($target, $cmd, [System.Text.Encoding]::ASCII)
-
-    if (Test-Path $target) {
-        Write-Output "  $target written"
-        $done.Add("First-boot hook: SetupComplete.cmd re-asserts the update and Defender policy")
+    $task = Get-ScheduledTask -TaskName 'ClarkPolicyReassert' -ErrorAction SilentlyContinue
+    if ($task) {
+        Write-Output "  scheduled task ClarkPolicyReassert registered (at startup, SYSTEM)"
+        $done.Add("Boot hook: scheduled task ClarkPolicyReassert re-asserts the update and Defender policy")
     } else {
-        Write-Output "  could not write $target"
-        $done.Add("First-boot hook: NOT written; the update policy will read 0 after sysprep")
+        Write-Output "  scheduled task did not register"
+        $done.Add("Boot hook: NOT registered; NoAutoUpdate will read 0 after sysprep")
     }
 }
 catch {
-    Write-Output "  first-boot hook skipped: $($_.Exception.Message)"
-    $done.Add("First-boot hook: skipped ($($_.Exception.Message))")
+    Write-Output "  boot hook skipped: $($_.Exception.Message)"
+    $done.Add("Boot hook: skipped ($($_.Exception.Message))")
 }
 
 # ---------------------------------------------------------------------------
