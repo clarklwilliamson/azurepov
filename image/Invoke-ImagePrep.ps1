@@ -165,11 +165,25 @@ Step "boot-time hook to re-assert what sysprep clears"
 # Wrapped, because this is a refinement. The five things above are the demo and a
 # refinement must not be able to take the build down with it.
 try {
-    $reassert = 'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f' +
-                ' & reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f' +
-                ' & sc config wuauserv start= disabled'
+    # Write the commands to a file and have the task run the file. Passing them inline
+    # as "cmd.exe /c reg add \"...\" & reg add \"...\" & sc config ..." looks fine and
+    # is not: Task Scheduler mangles the nested quotes, the reg adds fail, and because
+    # an &-chain returns only the LAST command's exit code the task still reports
+    # lastResult=0. A success code that does not mean the work happened.
+    $hookDir = $AgentRoot
+    New-Item -Path $hookDir -ItemType Directory -Force | Out-Null
+    $hookCmd = Join-Path $hookDir 'reassert-policy.cmd'
 
-    $action    = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c $reassert"
+    $lines = @(
+        '@echo off',
+        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f',
+        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f',
+        'sc config wuauserv start= disabled',
+        'exit /b 0'
+    )
+    [System.IO.File]::WriteAllText($hookCmd, (($lines -join "`r`n") + "`r`n"), [System.Text.Encoding]::ASCII)
+
+    $action    = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$hookCmd`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
