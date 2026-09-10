@@ -137,6 +137,14 @@ One `Standard_D2ads_v6` build VM for a few minutes, one more to verify, both del
 pipeline. The gallery image version is the only thing that persists, and it is charged as
 storage.
 
+## Running both pipelines
+
+The GitHub Actions workflow and the Azure DevOps pipeline are the same demo and
+they write to the same resource group, gallery and image version number. **Run one
+at a time.** Actions has a `concurrency` group so it will queue rather than
+collide with itself, but nothing stops the two systems from racing each other.
+Pick whichever one the room uses.
+
 ## Scope
 
 Clean-room. Written from public vendor and Azure documentation. Contains nothing from any
