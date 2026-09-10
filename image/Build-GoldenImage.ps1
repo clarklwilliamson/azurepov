@@ -4,7 +4,7 @@
     The whole loop:
 
         1. create a build VM from a marketplace image, pinned to an exact version
-        2. run Install-Agents.ps1 inside it, which installs both agents inert
+        2. run Invoke-ImagePrep.ps1 inside it, which does the five things
         3. sysprep /generalize /oobe /shutdown
         4. deallocate, generalize, capture as a numbered gallery image version
         5. delete the build VM and everything it brought with it
@@ -16,13 +16,13 @@
     .EXAMPLE
         pwsh ./image/Build-GoldenImage.ps1 `
             -ResourceGroup pov-images -GalleryName povgallery `
-            -ImageDefinition win2022-hardened -ImageVersion 1.0.0
+            -ImageDefinition win2022-clarkdemo -ImageVersion 1.0.0 -LocalAdminPassword <pw>
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)] [string]$ResourceGroup,
     [Parameter(Mandatory)] [string]$GalleryName,
-    [string]$ImageDefinition = 'win2022-hardened',
+    [string]$ImageDefinition = 'win2022-clarkdemo',
     [Parameter(Mandatory)] [string]$ImageVersion,
 
     [string]$Location      = 'westus3',
@@ -37,7 +37,7 @@ param(
 
     # Pinned on purpose. 'latest' here would mean two image versions built a week apart
     # start from different Windows builds, which is the problem this repo exists to fix.
-    [string]$SourceImage   = 'MicrosoftWindowsServer:WindowsServer:2022-datacenter-azure-edition:20348.2582.240619',
+    [string]$SourceImage   = 'MicrosoftWindowsServer:windowsserver2022:2022-datacenter-azure-edition-smalldisk:20348.5622.260906',
 
     [switch]$KeepBuildVm
 )
@@ -55,7 +55,9 @@ function Invoke-Az {
 
 function Write-Step { param([string]$Text) Write-Host ""; Write-Host "== $Text" }
 
-$adminPassword = -join ((65..90) + (97..122) + (48..57) + (33,35,37,64) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+# Reuse the passed-in secret for the build VM too. A locally generated one is not known
+# to GitHub, so it would appear in clear text if az echoes the failing command.
+$adminPassword = $LocalAdminPassword
 
 try {
     Write-Step "1/5  build VM $BuildVmName from $SourceImage"
@@ -144,9 +146,8 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     Write-Host "  $versionId"
     Write-Host ""
     Write-Host "Build a server from exactly this disk:"
-    Write-Host "  az deployment group create -g $ResourceGroup ``"
-    Write-Host "     --template-file infra/vm-from-gallery.bicep ``"
-    Write-Host "     --parameters imageVersionId=$versionId adminPassword=<pw>"
+    Write-Host "  az vm create -g $ResourceGroup -n mysrv --image $versionId ``"
+    Write-Host "     --size Standard_D2s_v3 --admin-username imgbuilder --admin-password <pw>"
 }
 catch {
     Write-Host ""
