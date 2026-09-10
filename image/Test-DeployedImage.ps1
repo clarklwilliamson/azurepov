@@ -20,7 +20,7 @@ $wu     = Get-Service wuauserv -ErrorAction SilentlyContinue
 $noAuto = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate
 Add-Check 'Windows Update disabled' `
           (($wu.StartType -eq 'Disabled') -and ($noAuto -eq 1)) `
-          "wuauserv StartType=$($wu.StartType), NoAutoUpdate=$noAuto"
+          "wuauserv StartType=$($wu.StartType), NoAutoUpdate=$noAuto (SetupComplete.cmd re-asserts the policy at first boot)"
 
 # 2. Local admin
 $user    = Get-LocalUser -Name 'clarkadmin' -ErrorAction SilentlyContinue
@@ -44,12 +44,14 @@ foreach ($agent in @(
 
     $svc     = Get-Service -Name $agent.Svc -ErrorAction SilentlyContinue
     $logPath = "C:\ClarkAgents\$($agent.Dir)\$($agent.Dir.ToLower()).log"
-    $log     = Get-Content -Path $logPath -ErrorAction SilentlyContinue
-    $ranHere = ($log | Where-Object { $_ -match 'running' }) -ne $null
+    $log     = @(Get-Content -Path $logPath -ErrorAction SilentlyContinue)
+    # "running" is only ever written by the service starting. The build-time seed line
+    # says "installed into image", so a running line proves it started on THIS machine.
+    $ranHere = @($log | Where-Object { $_ -match 'running' }).Count -gt 0
 
     Add-Check "$($agent.Svc) service" `
-              (($null -ne $svc) -and $ranHere) `
-              "state=$($svc.Status), start=$($svc.StartType), log lines=$($log.Count)"
+              (($null -ne $svc) -and ($svc.Status -eq 'Running') -and $ranHere) `
+              "state=$($svc.Status), start=$($svc.StartType), started-here=$ranHere, log lines=$($log.Count)"
 
     if ($log) {
         Write-Output ""

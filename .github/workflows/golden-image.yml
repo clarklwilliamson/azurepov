@@ -45,8 +45,6 @@ jobs:
   build:
     name: Build and capture image
     runs-on: ubuntu-latest
-    outputs:
-      versionId: ${{ steps.capture.outputs.versionId }}
     steps:
       - uses: actions/checkout@v4
 
@@ -125,12 +123,20 @@ jobs:
       - name: Create a server from the image version
         id: vm
         run: |
-          IMG="${{ needs.build.outputs.versionId }}"
+          # Do NOT try to carry this id between jobs. It contains the subscription id,
+          # which is a secret, and GitHub silently drops any step output containing a
+          # secret ("Skip output 'versionId' since it may contain secret"). Look it up
+          # here, where we are already signed in to the same subscription.
+          IMG=$(az sig image-version show \
+                  -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" \
+                  --gallery-image-definition "$IMAGE_DEF" \
+                  --gallery-image-version "${{ inputs.imageVersion }}" \
+                  --query id -o tsv)
           # An empty --image does NOT fail. az falls back to a default and builds a
           # machine that is not the one under test, and every check then reports FAIL
           # for the wrong reason. Stop here instead.
           if [ -z "$IMG" ]; then
-            echo "::error::image version id is empty; the build job did not publish one"
+            echo "::error::image version ${{ inputs.imageVersion }} not found in the gallery"
             exit 1
           fi
           echo "building from: $IMG"

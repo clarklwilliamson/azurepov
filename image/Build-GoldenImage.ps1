@@ -180,9 +180,9 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
         throw "Capture reported success but the image version id came back empty. Refusing to continue: an empty id downstream becomes an empty --image, and az then builds a machine that is not the one under test."
     }
 
-    # Hand the id to the CI system here rather than re-querying in the workflow, so
-    # there is exactly one place it can go missing.
-    if ($env:GITHUB_OUTPUT) { "versionId=$versionId" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8 }
+    # Deliberately NOT written to $GITHUB_OUTPUT. The id contains the subscription id,
+    # which CI treats as a secret, and GitHub drops any output containing one with only
+    # a warning. The deploy job looks the id up itself instead.
 
     Write-Host ""
     Write-Host "Image version captured."

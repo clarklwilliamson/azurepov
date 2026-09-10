@@ -84,12 +84,6 @@ stages:
             -Location        '$(location)' `
             -LocalAdminPassword '$(LOCAL_ADMIN_PASSWORD)'
 
-          $id = az sig image-version show `
-                  -g '$(resourceGroup)' --gallery-name '$(galleryName)' `
-                  --gallery-image-definition '$(imageDef)' `
-                  --gallery-image-version '${{ parameters.imageVersion }}' --query id --output tsv
-          if ([string]::IsNullOrWhiteSpace($id)) { throw "image version id came back empty" }
-          Write-Host "##vso[task.setvariable variable=versionId;isOutput=true]$id"
       name: capture
 
 - stage: Deploy
@@ -99,8 +93,6 @@ stages:
   jobs:
   - job: deploy
     displayName: Server from the image version
-    variables:
-      versionId: $[ stageDependencies.Build.build.outputs['capture.versionId'] ]
     steps:
 
     - task: AzureCLI@2
@@ -111,16 +103,24 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           set -e
+          # Resolve the image id here rather than carrying it between stages. It contains
+          # the subscription id, which CI systems mask, and a masked value passed between
+          # stages arrives empty.
+          IMG=$(az sig image-version show \
+                  -g "$(resourceGroup)" --gallery-name "$(galleryName)" \
+                  --gallery-image-definition "$(imageDef)" \
+                  --gallery-image-version "${{ parameters.imageVersion }}" \
+                  --query id -o tsv)
           # An empty --image does not fail. az falls back to a default and builds a
           # machine that is not the one under test, so every check then reports FAIL
           # for the wrong reason.
-          if [ -z "$(versionId)" ]; then echo "image version id is empty"; exit 1; fi
-          echo "building from: $(versionId)"
+          if [ -z "$IMG" ]; then echo "image version not found in the gallery"; exit 1; fi
+          echo "building from: $IMG"
           VM="povsrv-$(Build.BuildId)"
           echo "##vso[task.setvariable variable=vmName]$VM"
           az vm create \
             -g "$(resourceGroup)" -n "$VM" -l "$(location)" \
-            --image "$(versionId)" \
+            --image "$IMG" \
             --size Standard_D2ads_v6 \
             --admin-username imgbuilder \
             --admin-password '$(LOCAL_ADMIN_PASSWORD)' \
