@@ -27,17 +27,20 @@ permissions:
   id-token: write      # required for OIDC
   contents: read
 
-# Both this workflow and the Azure DevOps one write to the same resource group,
-# gallery and image version number. Two runs at once fight over the same version
-# and one of them loses. Serialise, and never cancel a run midway: an interrupted
-# build leaves an orphaned VM and a half-written image version behind.
+# This workflow owns azurepov-gh / povgallerygh. The Azure DevOps pipeline owns its
+# own resource group and gallery, so the two can run at the same time. They used to
+# share one gallery and 2026-09-10 they collided: ADO failed with OperationPreempted
+# and this one with NotFound, nineteen seconds apart.
+#
+# The concurrency group below still serialises this workflow against ITSELF. Never
+# cancel a run midway: an interrupted build strands a VM and a half-written version.
 concurrency:
   group: golden-image
   cancel-in-progress: false
 
 env:
-  RESOURCE_GROUP: azurepov-demo
-  GALLERY_NAME: povgallery
+  RESOURCE_GROUP: azurepov-gh
+  GALLERY_NAME: povgallerygh
   IMAGE_DEF: win2022-clarkdemo
 
 jobs:

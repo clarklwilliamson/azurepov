@@ -66,7 +66,12 @@ A gallery image has a number. `1.0.0` is one specific disk, forever. That turns 
 this server running" from a guess into a lookup:
 
 ```bash
-az sig image-version list -g azurepov-demo --gallery-name povgallery \
+# GitHub Actions builds here
+az sig image-version list -g azurepov-gh  --gallery-name povgallerygh \
+   --gallery-image-definition win2022-clarkdemo -o table
+
+# Azure DevOps builds here
+az sig image-version list -g azurepov-ado --gallery-name povgalleryado \
    --gallery-image-definition win2022-clarkdemo -o table
 ```
 
@@ -139,11 +144,18 @@ storage.
 
 ## Running both pipelines
 
-The GitHub Actions workflow and the Azure DevOps pipeline are the same demo and
-they write to the same resource group, gallery and image version number. **Run one
-at a time.** Actions has a `concurrency` group so it will queue rather than
-collide with itself, but nothing stops the two systems from racing each other.
-Pick whichever one the room uses.
+The GitHub Actions workflow and the Azure DevOps pipeline are the same demo, and
+each owns its own resource group and gallery:
+
+| Pipeline | Resource group | Gallery |
+|---|---|---|
+| GitHub Actions | `azurepov-gh` | `povgallerygh` |
+| Azure DevOps | `azurepov-ado` | `povgalleryado` |
+
+So they can run at the same time. They used to share one gallery, and on
+2026-09-10 two runs started nineteen seconds apart and killed each other: Azure
+DevOps failed with `OperationPreempted`, GitHub with `NotFound`. Separate targets
+remove the possibility rather than asking anyone to remember to take turns.
 
 ## Scope
 

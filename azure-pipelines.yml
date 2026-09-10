@@ -25,8 +25,8 @@ parameters:
 
 variables:
   serviceConnection: 'azure-pov-wif'
-  resourceGroup: 'azurepov-demo'
-  galleryName: 'povgallery'
+  resourceGroup: 'azurepov-ado'
+  galleryName: 'povgalleryado'
   imageDef: 'win2022-clarkdemo'
   location: $[coalesce(variables['AZ_LOCATION'], 'westus3')]
 
