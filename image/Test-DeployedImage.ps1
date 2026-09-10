@@ -16,8 +16,24 @@ function Add-Check {
 }
 
 # 1. Windows Update
-$wu     = Get-Service wuauserv -ErrorAction SilentlyContinue
-$noAuto = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate
+#
+# The ClarkPolicyReassert task deliberately waits two minutes after boot, because Azure's
+# provisioning agent re-enables Windows Update a few seconds into first boot and anything
+# applied before that is overwritten. So this check has to wait for the task rather than
+# race it.
+#
+# The wait lives here, in the script both pipelines call, not in one pipeline's YAML.
+# It was in the GitHub workflow only, which is why the same image passed there and failed
+# in Azure DevOps.
+$deadline = (Get-Date).AddMinutes(6)
+do {
+    $wu     = Get-Service wuauserv -ErrorAction SilentlyContinue
+    $noAuto = (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU' -Name NoAutoUpdate -ErrorAction SilentlyContinue).NoAutoUpdate
+    if (($wu.StartType -eq 'Disabled') -and ($noAuto -eq 1)) { break }
+    if ((Get-Date) -gt $deadline) { break }
+    Write-Output "  waiting for ClarkPolicyReassert (wuauserv=$($wu.StartType), NoAutoUpdate=$noAuto)"
+    Start-Sleep -Seconds 20
+} while ($true)
 Add-Check 'Windows Update disabled' `
           (($wu.StartType -eq 'Disabled') -and ($noAuto -eq 1)) `
           "wuauserv StartType=$($wu.StartType), NoAutoUpdate=$noAuto (re-asserted at boot by the ClarkPolicyReassert task)"
