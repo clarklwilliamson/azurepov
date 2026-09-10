@@ -154,17 +154,45 @@ Write-Output "  folder, compiled service ClarkCrowdStrike, running"
 # it there rather than pretending the policy survived.
 # ---------------------------------------------------------------------------
 Step "first-boot hook to re-assert what sysprep clears"
-$scriptDir = Join-Path $env:SystemRoot 'Setup\Scripts'
-New-Item -Path $scriptDir -ItemType Directory -Force | Out-Null
-@'
-@echo off
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f
-reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f
-sc config wuauserv start= disabled
-exit /b 0
-'@ | Set-Content -Path (Join-Path $scriptDir 'SetupComplete.cmd') -Encoding Ascii
-Write-Output "  $scriptDir\SetupComplete.cmd written"
-$done.Add("First-boot hook: SetupComplete.cmd re-asserts the update and Defender policy")
+# This block killed an otherwise complete build: every one of the five things had
+# already succeeded. Whatever the cause, a refinement must never take the demo down
+# with it, so the whole thing is wrapped and reports itself either way.
+try {
+    $winDir = if ($env:SystemRoot) { $env:SystemRoot }
+              elseif ($env:windir)  { $env:windir }
+              else                  { 'C:\Windows' }
+
+    $scriptDir = Join-Path $winDir 'Setup\Scripts'
+    New-Item -Path $scriptDir -ItemType Directory -Force | Out-Null
+
+    # No here-string. This whole script is shipped to the VM via
+    # "az vm run-command invoke --scripts @file", which splits and reassembles it, and a
+    # here-string terminator that has to sit at column 0 is fragile through that. An
+    # array of lines joined at the end cannot be broken by re-indentation.
+    $lines = @(
+        '@echo off',
+        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" /v NoAutoUpdate /t REG_DWORD /d 1 /f',
+        'reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows Defender" /v DisableAntiSpyware /t REG_DWORD /d 1 /f',
+        'sc config wuauserv start= disabled',
+        'exit /b 0'
+    )
+    $cmd = ($lines -join "`r`n") + "`r`n"
+
+    $target = Join-Path $scriptDir 'SetupComplete.cmd'
+    [System.IO.File]::WriteAllText($target, $cmd, [System.Text.Encoding]::ASCII)
+
+    if (Test-Path $target) {
+        Write-Output "  $target written"
+        $done.Add("First-boot hook: SetupComplete.cmd re-asserts the update and Defender policy")
+    } else {
+        Write-Output "  could not write $target"
+        $done.Add("First-boot hook: NOT written; the update policy will read 0 after sysprep")
+    }
+}
+catch {
+    Write-Output "  first-boot hook skipped: $($_.Exception.Message)"
+    $done.Add("First-boot hook: skipped ($($_.Exception.Message))")
+}
 
 # ---------------------------------------------------------------------------
 Write-Output ""
