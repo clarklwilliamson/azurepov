@@ -88,6 +88,7 @@ stages:
                   -g '$(resourceGroup)' --gallery-name '$(galleryName)' `
                   --gallery-image-definition '$(imageDef)' `
                   --gallery-image-version '${{ parameters.imageVersion }}' --query id --output tsv
+          if ([string]::IsNullOrWhiteSpace($id)) { throw "image version id came back empty" }
           Write-Host "##vso[task.setvariable variable=versionId;isOutput=true]$id"
       name: capture
 
@@ -110,6 +111,11 @@ stages:
         scriptLocation: inlineScript
         inlineScript: |
           set -e
+          # An empty --image does not fail. az falls back to a default and builds a
+          # machine that is not the one under test, so every check then reports FAIL
+          # for the wrong reason.
+          if [ -z "$(versionId)" ]; then echo "image version id is empty"; exit 1; fi
+          echo "building from: $(versionId)"
           VM="povsrv-$(Build.BuildId)"
           echo "##vso[task.setvariable variable=vmName]$VM"
           az vm create \
