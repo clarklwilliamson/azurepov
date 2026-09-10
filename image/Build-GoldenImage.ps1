@@ -52,8 +52,18 @@ $ErrorActionPreference = 'Stop'
 function Invoke-Az {
     $azArgs = $args
     Write-Verbose "az $($azArgs -join ' ')"
-    $out = & az @azArgs 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "az $($azArgs -join ' ') failed:`n$out" }
+    # az writes progress and warnings to stderr. With 2>&1 those arrive as ErrorRecords,
+    # and under $ErrorActionPreference='Stop' PowerShell 7 promotes them to terminating
+    # errors, so a command that succeeded still blows up the script. Drop to Continue for
+    # the duration of the call and judge the result on the exit code alone.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out  = & az @azArgs 2>&1
+        $code = $LASTEXITCODE
+    }
+    finally { $ErrorActionPreference = $prev }
+    if ($code -ne 0) { throw "az $($azArgs -join ' ') failed (exit $code):`n$out" }
     return $out
 }
 
@@ -86,15 +96,21 @@ try {
         --parameters "LocalAdminPassword=$LocalAdminPassword" `
         --query "value[0].message" --output tsv
 
+    # az --output tsv hands back an ARRAY when the value spans lines. `-notmatch` against
+    # an array FILTERS it and returns the non-matching elements, so `if ($array -notmatch
+    # 'x')` is truthy whenever any single line lacks 'x'. Flatten to one string first.
+    # (Same trap as reading a verdict out of $tmpvar[$tmpvar.Count-1].)
+    $prepText = ($prepOut | Out-String)
+
     # Echo just the summary block the prep script emits, not the whole stream.
     $inSummary = $false
-    foreach ($line in ($prepOut -split "`n")) {
+    foreach ($line in ($prepText -split "`r?`n")) {
         if ($line -match 'IMAGE-PREP-SUMMARY-BEGIN') { $inSummary = $true; continue }
         if ($line -match 'IMAGE-PREP-SUMMARY-END')   { $inSummary = $false; continue }
-        if ($inSummary) { Write-Host $line }
+        if ($inSummary -and $line.Trim()) { Write-Host $line }
     }
-    if ($prepOut -notmatch 'IMAGE-PREP-SUMMARY-END') {
-        throw "Image prep did not finish. Output:`n$prepOut"
+    if ($prepText -notmatch 'IMAGE-PREP-SUMMARY-END') {
+        throw "Image prep did not finish. Output:`n$prepText"
     }
 
     Write-Step "3/5  sysprep and shut down"
@@ -142,7 +158,22 @@ Start-Process -FilePath "$env:SystemRoot\System32\Sysprep\Sysprep.exe" `
     }
     else {
         Invoke-Az vm delete --resource-group $ResourceGroup --name $BuildVmName --yes --output none
-        Write-Host "  build VM deleted"
+        # az vm delete removes only the VM. The NIC, OS disk, NSG and VNet it created are
+        # left behind and keep costing money, so sweep anything named after the build VM.
+        $strays = (Invoke-Az resource list --resource-group $ResourceGroup `
+                     --query "[?starts_with(name, '$BuildVmName')].id" --output tsv)
+        foreach ($id in @($strays)) {
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            try { Invoke-Az resource delete --ids $id --output none } catch { }
+        }
+        # NIC before VNet, so take a second pass for anything that was still attached.
+        $strays = (Invoke-Az resource list --resource-group $ResourceGroup `
+                     --query "[?starts_with(name, '$BuildVmName')].id" --output tsv)
+        foreach ($id in @($strays)) {
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            try { Invoke-Az resource delete --ids $id --output none } catch { }
+        }
+        Write-Host "  build VM and its disk, NIC, NSG and VNet deleted"
     }
 
     Write-Host ""
