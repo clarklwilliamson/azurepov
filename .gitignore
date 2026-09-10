@@ -1,0 +1,8 @@
+# never
+*.pfx
+*.pem
+*.key
+.env
+*.local.json
+*.parameters.local.json
+.azure/

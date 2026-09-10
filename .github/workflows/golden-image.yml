@@ -1,0 +1,166 @@
+name: Golden image
+
+# Two jobs, which is the whole demo:
+#
+#   build    stock Windows 2022 -> five things -> sysprep -> versioned gallery image
+#   deploy   a server from that exact image version -> prove the five things are there
+#
+# Auth is OIDC. There is no Azure password or client secret stored anywhere.
+
+on:
+  workflow_dispatch:
+    inputs:
+      imageVersion:
+        description: 'Image version to create, e.g. 1.0.0'
+        required: true
+        default: '1.0.0'
+      location:
+        description: 'Azure region'
+        required: true
+        default: 'westus3'
+      deployAfterBuild:
+        description: 'Deploy a server from the new image and verify it'
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write      # required for OIDC
+  contents: read
+
+env:
+  RESOURCE_GROUP: azurepov-demo
+  GALLERY_NAME: povgallery
+  IMAGE_DEF: win2022-clarkdemo
+
+jobs:
+
+  build:
+    name: Build and capture image
+    runs-on: ubuntu-latest
+    outputs:
+      versionId: ${{ steps.capture.outputs.versionId }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resource group and gallery
+        run: |
+          az group create -n "$RESOURCE_GROUP" -l "${{ inputs.location }}" -o none
+          az sig create -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" -l "${{ inputs.location }}" -o none 2>/dev/null || true
+          az sig image-definition create \
+            -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" \
+            --gallery-image-definition "$IMAGE_DEF" \
+            --publisher azurepov --offer WindowsServer --sku 2022-clarkdemo \
+            --os-type Windows --os-state Generalized \
+            --hyper-v-generation V2 -o none 2>/dev/null || true
+          echo "gallery and image definition ready"
+
+      - name: Build, customize, sysprep, capture
+        id: capture
+        shell: pwsh
+        run: |
+          ./image/Build-GoldenImage.ps1 `
+            -ResourceGroup   $env:RESOURCE_GROUP `
+            -GalleryName     $env:GALLERY_NAME `
+            -ImageDefinition $env:IMAGE_DEF `
+            -ImageVersion    '${{ inputs.imageVersion }}' `
+            -Location        '${{ inputs.location }}' `
+            -LocalAdminPassword '${{ secrets.LOCAL_ADMIN_PASSWORD }}'
+
+          $id = az sig image-version show `
+                  -g $env:RESOURCE_GROUP --gallery-name $env:GALLERY_NAME `
+                  --gallery-image-definition $env:IMAGE_DEF `
+                  --gallery-image-version '${{ inputs.imageVersion }}' --query id -o tsv
+          "versionId=$id" >> $env:GITHUB_OUTPUT
+
+      - name: Image versions in the gallery
+        run: |
+          echo "### Image versions" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          az sig image-version list \
+            -g "$RESOURCE_GROUP" --gallery-name "$GALLERY_NAME" \
+            --gallery-image-definition "$IMAGE_DEF" \
+            --query "[].{version:name, created:publishingProfile.publishedDate, state:provisioningState}" \
+            -o table >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy from image and verify
+    needs: build
+    if: ${{ inputs.deployAfterBuild }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sign in to Azure (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Create a server from the image version
+        id: vm
+        run: |
+          VM="povsrv-${GITHUB_RUN_NUMBER}"
+          echo "vmName=$VM" >> $GITHUB_OUTPUT
+          az vm create \
+            -g "$RESOURCE_GROUP" -n "$VM" -l "${{ inputs.location }}" \
+            --image "${{ needs.build.outputs.versionId }}" \
+            --size Standard_D2s_v3 \
+            --admin-username imgbuilder \
+            --admin-password '${{ secrets.LOCAL_ADMIN_PASSWORD }}' \
+            --security-type TrustedLaunch \
+            --nsg-rule NONE --public-ip-address "" \
+            -o none
+          echo "created $VM from ${{ needs.build.outputs.versionId }}"
+
+      - name: Verify the five things on the deployed server
+        id: verify
+        run: |
+          OUT=$(az vm run-command invoke \
+                  -g "$RESOURCE_GROUP" -n "${{ steps.vm.outputs.vmName }}" \
+                  --command-id RunPowerShellScript \
+                  --scripts @image/Test-DeployedImage.ps1 \
+                  --query "value[0].message" -o tsv)
+          echo "$OUT"
+          echo "$OUT" > /tmp/verify.txt
+          grep -q '^OVERALL|PASS' /tmp/verify.txt && echo "overall=PASS" >> $GITHUB_OUTPUT || echo "overall=FAIL" >> $GITHUB_OUTPUT
+
+      - name: Summary
+        run: |
+          {
+            echo "## Golden image ${{ inputs.imageVersion }}"
+            echo ""
+            echo "Server \`${{ steps.vm.outputs.vmName }}\` was built from the captured image and touched by nobody."
+            echo ""
+            echo "| | Check | Detail |"
+            echo "|---|---|---|"
+            sed -n '/^VERIFY-BEGIN/,/^VERIFY-END/p' /tmp/verify.txt \
+              | grep -E '^(PASS|FAIL)\|' \
+              | while IFS='|' read -r mark name detail; do
+                  icon=$([ "$mark" = "PASS" ] && echo ":white_check_mark:" || echo ":x:")
+                  echo "| $icon | $name | \`$detail\` |"
+                done
+            echo ""
+            echo "**Overall: ${{ steps.verify.outputs.overall }}**"
+            echo ""
+            echo "> The two agent services are demo stand-ins. No Qualys or CrowdStrike software"
+            echo "> is installed and no vendor credentials were used."
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Tear down the test server
+        if: always()
+        run: |
+          az vm delete -g "$RESOURCE_GROUP" -n "${{ steps.vm.outputs.vmName }}" --yes -o none 2>/dev/null || true
+          echo "test server deleted; the image version stays in the gallery"
+
+      - name: Fail the run if any check failed
+        if: steps.verify.outputs.overall != 'PASS'
+        run: exit 1
